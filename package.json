@@ -1,0 +1,28 @@
+{
+  "name": "pi-extension-bedrock-mantle-openai",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Bedrock Mantle OpenAI provider extension for Pi",
+  "main": "index.ts",
+  "scripts": {
+    "test": "tsx --test test/verify.test.js",
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@aws/bedrock-token-generator": "^1.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
