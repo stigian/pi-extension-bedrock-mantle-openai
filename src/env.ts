@@ -1,6 +1,26 @@
 import { readFileSync } from "node:fs";
 import type { ProviderEnv } from "@earendil-works/pi-ai";
 
+export const AWS_SCOPED_PROCESS_ENV_KEYS = [
+  "AWS_PROFILE",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "AWS_ROLE_ARN",
+  "AWS_ROLE_SESSION_NAME",
+  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+  "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+  "AWS_SHARED_CREDENTIALS_FILE",
+  "AWS_CONFIG_FILE",
+  "AWS_SDK_LOAD_CONFIG",
+  "AWS_EC2_METADATA_DISABLED",
+] as const;
+
+const awsScopedProcessEnvKeySet = new Set<string>(AWS_SCOPED_PROCESS_ENV_KEYS);
+
 let bunSandboxEnvCache: Map<string, string> | null = null;
 let scopedEnvQueue: Promise<void> = Promise.resolve();
 
@@ -25,7 +45,8 @@ export async function withScopedProcessEnv<T>(
   env: ProviderEnv | undefined,
   fn: () => Promise<T>
 ): Promise<T> {
-  if (!env || Object.keys(env).length === 0) {
+  const scopedEntries = getAwsScopedProcessEnvEntries(env);
+  if (scopedEntries.length === 0) {
     return fn();
   }
 
@@ -39,7 +60,7 @@ export async function withScopedProcessEnv<T>(
 
   const originalValues = new Map<string, string | undefined>();
   try {
-    for (const [key, value] of Object.entries(env)) {
+    for (const [key, value] of scopedEntries) {
       originalValues.set(key, process.env[key]);
       process.env[key] = value;
     }
@@ -54,6 +75,14 @@ export async function withScopedProcessEnv<T>(
     }
     releaseQueue();
   }
+}
+
+function getAwsScopedProcessEnvEntries(env?: ProviderEnv): Array<[string, string]> {
+  if (!env) {
+    return [];
+  }
+
+  return Object.entries(env).filter(([key]) => awsScopedProcessEnvKeySet.has(key));
 }
 
 function getBunSandboxEnvValue(name: string): string | undefined {

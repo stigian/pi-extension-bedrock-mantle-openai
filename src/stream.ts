@@ -1,13 +1,15 @@
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
+  type AssistantMessageEvent,
   type AssistantMessageEventStream,
   type Context,
   type Model,
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/compat";
-import { resolveMantleTarget } from "./region.js";
+import { sanitizeAssistantErrorMessage, sanitizeBedrockMantleError } from "./errors.js";
+import { resolveMantleTarget, type MantleTarget } from "./region.js";
 import { getBearerToken } from "./token.js";
 
 interface BedrockMantleStreamOptions extends SimpleStreamOptions {
@@ -75,12 +77,12 @@ export function streamBedrockMantle(
       );
 
       for await (const event of innerStream) {
-        stream.push(event);
+        stream.push(sanitizeStreamEvent(event, target));
       }
       stream.end();
     } catch (err) {
       const stopReason = options?.signal?.aborted ? "aborted" : "error";
-      const output = createErrorMessage(model, stopReason, err);
+      const output = createErrorMessage(model, stopReason, err, target);
       pushErrorEvent(stream, output, stopReason);
     }
   })();
@@ -101,9 +103,10 @@ function pushErrorEvent(
 function createErrorMessage(
   model: Model<"openai-responses">,
   stopReason: "error" | "aborted",
-  error: unknown
+  error: unknown,
+  target?: MantleTarget
 ): AssistantMessage {
-  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorMessage = sanitizeBedrockMantleError(error, target);
 
   return {
     role: "assistant",
@@ -123,4 +126,32 @@ function createErrorMessage(
     errorMessage,
     timestamp: Date.now(),
   };
+}
+
+function sanitizeStreamEvent(
+  event: AssistantMessageEvent,
+  target: MantleTarget
+): AssistantMessageEvent {
+  if ("error" in event) {
+    return {
+      ...event,
+      error: sanitizeAssistantErrorMessage(event.error, target),
+    };
+  }
+
+  if ("message" in event && event.message.errorMessage) {
+    return {
+      ...event,
+      message: sanitizeAssistantErrorMessage(event.message, target),
+    };
+  }
+
+  if ("partial" in event && event.partial.errorMessage) {
+    return {
+      ...event,
+      partial: sanitizeAssistantErrorMessage(event.partial, target),
+    };
+  }
+
+  return event;
 }

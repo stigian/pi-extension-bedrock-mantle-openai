@@ -1,21 +1,8 @@
+import { createHash } from "node:crypto";
 import { getTokenProvider } from "@aws/bedrock-token-generator";
 import type { ProviderEnv } from "@earendil-works/pi-ai";
-import { getProviderEnvValue, withScopedProcessEnv } from "./env.js";
-
-const TOKEN_PROVIDER_ENV_KEYS = [
-  "AWS_PROFILE",
-  "AWS_ACCESS_KEY_ID",
-  "AWS_SECRET_ACCESS_KEY",
-  "AWS_SESSION_TOKEN",
-  "AWS_WEB_IDENTITY_TOKEN_FILE",
-  "AWS_ROLE_ARN",
-  "AWS_ROLE_SESSION_NAME",
-  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-  "AWS_SHARED_CREDENTIALS_FILE",
-  "AWS_CONFIG_FILE",
-  "AWS_SDK_LOAD_CONFIG",
-] as const;
+import { AWS_SCOPED_PROCESS_ENV_KEYS, getProviderEnvValue, withScopedProcessEnv } from "./env.js";
+import { createBearerTokenFailureMessage } from "./errors.js";
 
 const tokenProviderCache = new Map<string, () => Promise<string>>();
 
@@ -52,12 +39,7 @@ export async function getBearerToken(region: string, env?: ProviderEnv): Promise
     }
     return token;
   } catch (error) {
-    const origMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Failed to generate Bedrock bearer token for region '${region}': ${origMessage}. ` +
-      `Please ensure valid AWS credentials (via provider-scoped env, AWS environment variables, AWS profile, IAM role, or SSO) ` +
-      `with permissions for Bedrock Mantle in region '${region}'.`
-    );
+    throw new Error(createBearerTokenFailureMessage(region, error));
   }
 }
 
@@ -69,12 +51,25 @@ export function clearTokenProviderCache(): void {
 }
 
 function getTokenProviderCacheKey(region: string, env?: ProviderEnv): string {
-  const parts = [region];
-  for (const key of TOKEN_PROVIDER_ENV_KEYS) {
+  const fingerprint = createHash("sha256");
+  let hasScopedAuthInput = false;
+
+  for (const key of AWS_SCOPED_PROCESS_ENV_KEYS) {
     const value = getProviderEnvValue(key, env);
-    if (value) {
-      parts.push(`${key}=${value}`);
+    if (!value) {
+      continue;
     }
+
+    hasScopedAuthInput = true;
+    fingerprint.update(key);
+    fingerprint.update("\0");
+    fingerprint.update(value);
+    fingerprint.update("\0");
   }
-  return parts.join("\n");
+
+  if (!hasScopedAuthInput) {
+    return region;
+  }
+
+  return `${region}\nsha256=${fingerprint.digest("hex")}`;
 }

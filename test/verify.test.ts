@@ -1,6 +1,14 @@
 import assert from "node:assert";
 import test, { describe } from "node:test";
+import { CredentialsProviderError, ProviderError, TokenProviderError } from "@smithy/core/config";
 import type { Model } from "@earendil-works/pi-ai";
+import { APIConnectionError, AuthenticationError, NotFoundError, PermissionDeniedError } from "openai/error";
+import { withScopedProcessEnv } from "../src/env.js";
+import {
+  createBearerTokenFailureMessage,
+  sanitizeBedrockMantleError,
+  sanitizeBedrockMantleErrorText,
+} from "../src/errors.js";
 import { MODELS } from "../src/models.js";
 import {
   DEFAULT_MANTLE_BASE_URL,
@@ -126,6 +134,169 @@ describe("Bedrock Mantle OpenAI Extension Verification", () => {
 
     const providerOtherProfile = getBearerTokenProvider("us-gov-west-1", { AWS_PROFILE: "commercial" });
     assert.notStrictEqual(provider1, providerOtherProfile, "Different scoped auth env gets a different provider instance");
+
+    const directCredsProvider1 = getBearerTokenProvider("us-gov-west-1", {
+      AWS_ACCESS_KEY_ID: "AKIAEXAMPLE1",
+      AWS_SECRET_ACCESS_KEY: "secret-a",
+      AWS_SESSION_TOKEN: "session-a",
+    });
+    const directCredsProvider2 = getBearerTokenProvider("us-gov-west-1", {
+      AWS_ACCESS_KEY_ID: "AKIAEXAMPLE1",
+      AWS_SECRET_ACCESS_KEY: "secret-a",
+      AWS_SESSION_TOKEN: "session-a",
+    });
+    assert.strictEqual(
+      directCredsProvider1,
+      directCredsProvider2,
+      "Identical direct credential tuples reuse the same provider instance"
+    );
+
+    const rotatedSecretProvider = getBearerTokenProvider("us-gov-west-1", {
+      AWS_ACCESS_KEY_ID: "AKIAEXAMPLE1",
+      AWS_SECRET_ACCESS_KEY: "secret-b",
+      AWS_SESSION_TOKEN: "session-a",
+    });
+    assert.notStrictEqual(
+      directCredsProvider1,
+      rotatedSecretProvider,
+      "Changing scoped credentials yields a different provider instance"
+    );
+  });
+
+  test("scoped process env only overlays AWS credential-resolution keys", async () => {
+    await withEnv(
+      {
+        AWS_PROFILE: undefined,
+        AWS_CONTAINER_AUTHORIZATION_TOKEN: undefined,
+        CUSTOM_SECRET: undefined,
+      },
+      async () => {
+        await withScopedProcessEnv(
+          {
+            AWS_PROFILE: "gov-profile",
+            AWS_CONTAINER_AUTHORIZATION_TOKEN: "opaque-token",
+            CUSTOM_SECRET: "should-not-leak",
+          },
+          async () => {
+            assert.strictEqual(process.env.AWS_PROFILE, "gov-profile");
+            assert.strictEqual(process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN, "opaque-token");
+            assert.strictEqual(process.env.CUSTOM_SECRET, undefined);
+          }
+        );
+
+        assert.strictEqual(process.env.AWS_PROFILE, undefined);
+        assert.strictEqual(process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN, undefined);
+        assert.strictEqual(process.env.CUSTOM_SECRET, undefined);
+      }
+    );
+  });
+
+  test("bearer token failures are classified from Smithy error types", () => {
+    const credentialsError = new CredentialsProviderError("Not found in ENV: AWS_ACCESS_KEY_ID", {
+      tryNextLink: false,
+    });
+    const credentialsMessage = createBearerTokenFailureMessage("us-gov-west-1", credentialsError);
+    assert.match(credentialsMessage, /No usable AWS credentials were resolved/);
+
+    const providerError = Object.assign(
+      new ProviderError("Error response received from instance metadata service", { tryNextLink: false }),
+      { statusCode: 401 }
+    );
+    const providerMessage = createBearerTokenFailureMessage("us-gov-west-1", providerError);
+    assert.match(providerMessage, /credential provider request failed with status 401/);
+
+    const tokenProviderError = new TokenProviderError("Token provider failed", { tryNextLink: false });
+    const tokenMessage = createBearerTokenFailureMessage("us-gov-west-1", tokenProviderError);
+    assert.match(tokenMessage, /AWS token generation failed before the Bedrock request was sent/);
+  });
+
+  test("raw OpenAI-compatible SDK errors are sanitized from structured fields", () => {
+    const target = {
+      region: "us-gov-west-1",
+      baseUrl: "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1",
+    };
+
+    const unauthorized = sanitizeBedrockMantleError(
+      new AuthenticationError(
+        401,
+        {
+          code: "invalid_api_key",
+          message: "The security token included in the request is invalid.",
+          type: "permission_denied_error",
+          param: null,
+        },
+        undefined,
+        new Headers()
+      ),
+      target
+    );
+    assert.match(unauthorized, /401 Unauthorized/);
+    assert.match(unauthorized, /AWS\/Bedrock authentication failed/);
+    assert.match(unauthorized, /Upstream error code: invalid_api_key \(permission_denied_error\)/);
+
+    const forbidden = sanitizeBedrockMantleError(
+      new PermissionDeniedError(
+        403,
+        {
+          code: "access_denied",
+          message: "Access denied",
+          type: "permission_denied_error",
+          param: null,
+        },
+        undefined,
+        new Headers()
+      ),
+      target
+    );
+    assert.match(forbidden, /403 Forbidden/);
+    assert.match(forbidden, /IAM permissions/);
+
+    const missing = sanitizeBedrockMantleError(
+      new NotFoundError(
+        404,
+        {
+          code: "model_not_found",
+          message: "Model not found",
+          type: "not_found_error",
+          param: null,
+        },
+        undefined,
+        new Headers()
+      ),
+      target
+    );
+    assert.match(missing, /404 Not Found/);
+    assert.match(missing, /selected model is available in this region/);
+
+    const connection = sanitizeBedrockMantleError(new APIConnectionError({}), target);
+    assert.match(connection, /Connection error while calling Bedrock Mantle endpoint/);
+    assert.match(connection, /proxy configuration/);
+  });
+
+  test("formatted OpenAI API error strings are parsed from defined response bodies", () => {
+    const target = {
+      region: "us-gov-west-1",
+      baseUrl: "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1",
+    };
+
+    const unauthorized = sanitizeBedrockMantleErrorText(
+      'OpenAI API error (401): {"code":"invalid_api_key","message":"The security token included in the request is invalid.","param":null,"type":"permission_denied_error"}',
+      target
+    );
+    assert.match(unauthorized, /401 Unauthorized/);
+    assert.match(unauthorized, /AWS\/Bedrock authentication failed/);
+    assert.match(unauthorized, /Upstream error code: invalid_api_key \(permission_denied_error\)/);
+
+    const connection = sanitizeBedrockMantleErrorText("Connection error.", target);
+    assert.match(connection, /Connection error while calling Bedrock Mantle endpoint/);
+    assert.match(connection, /proxy configuration/);
+
+    const redacted = sanitizeBedrockMantleErrorText(
+      "Credential debug AWS_SECRET_ACCESS_KEY=topsecret Authorization: Bearer abc123"
+    );
+    assert.doesNotMatch(redacted, /topsecret/);
+    assert.doesNotMatch(redacted, /abc123/);
+    assert.match(redacted, /\[redacted\]/);
   });
 
   test("pre-execution diagnostic error event stream is emitted when custom endpoint has no region source", async () => {
