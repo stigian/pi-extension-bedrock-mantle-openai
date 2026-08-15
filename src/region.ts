@@ -1,37 +1,113 @@
+import type { ProviderEnv } from "@earendil-works/pi-ai";
+import { getProviderEnvValue } from "./env.js";
+
+export const DEFAULT_MANTLE_REGION = "us-east-1";
+export const DEFAULT_MANTLE_BASE_URL = `https://bedrock-mantle.${DEFAULT_MANTLE_REGION}.api.aws/openai/v1`;
+
+export interface MantleTarget {
+  region: string;
+  baseUrl: string;
+}
+
 /**
- * Resolves the AWS region according to the precedence chain:
- * 1. Explicit provider setting (passed from settings/config)
- * 2. AWS_REGION environment variable
- * 3. AWS_DEFAULT_REGION environment variable
- *
- * Throws a diagnostic error if no region can be resolved.
+ * Resolves the explicitly configured AWS region according to Pi's provider-env precedence.
  */
-export function resolveRegion(configuredRegion?: string): string {
+export function getConfiguredRegion(
+  configuredRegion?: string,
+  env?: ProviderEnv
+): string | undefined {
   if (configuredRegion && configuredRegion.trim().length > 0) {
     return configuredRegion.trim();
   }
 
-  const envRegion = process.env.AWS_REGION?.trim();
-  if (envRegion && envRegion.length > 0) {
+  const envRegion = getProviderEnvValue("AWS_REGION", env)?.trim();
+  if (envRegion) {
     return envRegion;
   }
 
-  const envDefaultRegion = process.env.AWS_DEFAULT_REGION?.trim();
-  if (envDefaultRegion && envDefaultRegion.length > 0) {
+  const envDefaultRegion = getProviderEnvValue("AWS_DEFAULT_REGION", env)?.trim();
+  if (envDefaultRegion) {
     return envDefaultRegion;
   }
 
-  throw new Error(
-    "AWS region could not be resolved. Please set AWS_REGION or AWS_DEFAULT_REGION environment variable, or configure 'region' in Pi settings under 'bedrock-mantle-openai'."
-  );
+  return undefined;
 }
 
 /**
- * Constructs the Bedrock Mantle base URL for a given region unless an explicit override is provided.
+ * Resolve the effective Mantle region and endpoint.
+ *
+ * Standard Mantle endpoints follow Pi's built-in Bedrock pattern:
+ * explicit region/env overrides win, otherwise the region is inferred from the
+ * model base URL. Custom endpoints are preserved as-is and require an explicit
+ * region when the hostname does not encode one.
  */
-export function getMantleBaseUrl(region: string, baseUrlOverride?: string): string {
-  if (baseUrlOverride && baseUrlOverride.trim().length > 0) {
-    return baseUrlOverride.trim();
+export function resolveMantleTarget(
+  modelBaseUrl: string | undefined,
+  configuredRegion?: string,
+  env?: ProviderEnv
+): MantleTarget {
+  const normalizedBaseUrl = normalizeBaseUrl(modelBaseUrl);
+  const explicitRegion = getConfiguredRegion(configuredRegion, env);
+  const endpointRegion = getStandardMantleEndpointRegion(normalizedBaseUrl);
+
+  if (!isStandardMantleEndpoint(normalizedBaseUrl)) {
+    if (!explicitRegion) {
+      throw new Error(
+        "AWS region could not be resolved. Set AWS_REGION or AWS_DEFAULT_REGION, including provider-scoped env overrides, when using a custom Bedrock Mantle baseUrl."
+      );
+    }
+
+    return {
+      region: explicitRegion,
+      baseUrl: normalizedBaseUrl,
+    };
   }
+
+  const resolvedRegion = explicitRegion || endpointRegion || DEFAULT_MANTLE_REGION;
+  return {
+    region: resolvedRegion,
+    baseUrl: getMantleBaseUrl(resolvedRegion),
+  };
+}
+
+/**
+ * Resolves the effective AWS region for Bedrock Mantle token generation.
+ */
+export function resolveRegion(
+  modelBaseUrl?: string,
+  configuredRegion?: string,
+  env?: ProviderEnv
+): string {
+  return resolveMantleTarget(modelBaseUrl, configuredRegion, env).region;
+}
+
+/**
+ * Constructs the standard Bedrock Mantle base URL for a given region.
+ */
+export function getMantleBaseUrl(region: string): string {
   return `https://bedrock-mantle.${region}.api.aws/openai/v1`;
+}
+
+export function getStandardMantleEndpointRegion(baseUrl?: string): string | undefined {
+  if (!baseUrl) {
+    return undefined;
+  }
+
+  try {
+    const { hostname } = new URL(baseUrl);
+    const match = hostname.toLowerCase().match(/^bedrock-mantle\.([a-z0-9-]+)\.api\.aws$/);
+    return match?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+export function isStandardMantleEndpoint(baseUrl?: string): boolean {
+  return getStandardMantleEndpointRegion(baseUrl) !== undefined;
+}
+
+function normalizeBaseUrl(baseUrl?: string): string {
+  return typeof baseUrl === "string" && baseUrl.trim().length > 0
+    ? baseUrl.trim()
+    : DEFAULT_MANTLE_BASE_URL;
 }

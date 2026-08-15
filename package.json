@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Bedrock Mantle OpenAI provider extension for Pi",
+  "keywords": ["pi-package"],
   "main": "index.ts",
   "scripts": {
-    "test": "tsx --test test/verify.test.js",
+    "test": "tsx --test test/verify.test.ts",
+    "typecheck": "tsc --noEmit",
     "clean": "echo 'nothing to clean'",
-    "build": "echo 'nothing to build'",
-    "check": "echo 'nothing to check'"
+    "build": "npm run check",
+    "check": "npm run typecheck && node --import tsx --input-type=module --eval \"import ext from './index.ts'; if (typeof ext !== 'function') throw new Error('Extension export must be a function');\" && npm test"
   },
   "pi": {
     "extensions": [
@@ -19,7 +21,9 @@
     "@aws/bedrock-token-generator": "^1.0.0"
   },
   "devDependencies": {
-    "tsx": "^4.19.0"
+    "@types/node": "^24.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.9.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
