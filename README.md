@@ -26,7 +26,7 @@ Standard Bedrock integrations use the Bedrock Converse API, which does not suppo
 Install the package into Pi using `pi install`:
 
 ```bash
-pi install git:github.com/stigian-ai/pi-extension-bedrock-mantle-openai
+pi install git:github.com/stigian/pi-extension-bedrock-mantle-openai
 ```
 
 Or for local development:
