@@ -1,83 +1,80 @@
-# Bedrock Mantle OpenAI Provider Extension for Pi
+# Bedrock Mantle OpenAI Provider for Pi
 
-A Pi extension that registers a custom model provider routing OpenAI frontier models through Amazon Bedrock's OpenAI-compatible **Mantle** endpoint (`bedrock-mantle`).
+A [Pi](https://pi.dev/) extension that adds support for OpenAI models on Amazon Bedrock's OpenAI-compatible Mantle endpoint.
 
-Standard Bedrock integrations use the Bedrock Converse API, which does not support recent OpenAI models. This extension uses the OpenAI **Responses API** on Bedrock Mantle with standard AWS credentials and short-term bearer tokens generated via `@aws/bedrock-token-generator`.
-
----
+Standard Bedrock integrations use the Bedrock Converse API, which does not support recent OpenAI models. This extension calls the OpenAI Responses API on Bedrock Mantle, using AWS credentials to mint short-lived bearer tokens via `@aws/bedrock-token-generator`.
 
 ## Features
 
-- **Responses API Support:** Streams responses using Pi's built-in OpenAI Responses API pipeline.
-- **AWS GovCloud Compatibility:** Compatible with `us-gov-west-1` (`https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1`).
-- **Provider-Scoped Env Support:** Honors Pi provider-scoped env overrides for region and AWS credential resolution.
-- **Standard Responses Defaults:** Uses Pi's built-in OpenAI Responses pipeline and leaves its default `store: false` behavior unchanged.
-- **Frontier Model Catalog:** Pre-configured support for:
+- Uses standard AWS credential configuration (same as the Bedrock provider)
+- AWS GovCloud support
+- Model catalog includes GPT-5-series models available on Bedrock Mantle
   - `openai.gpt-5.4`
   - `openai.gpt-5.5`
   - `openai.gpt-5.6-sol`
   - `openai.gpt-5.6-terra`
   - `openai.gpt-5.6-luna`
 
----
-
 ## Installation
-
-Install the package into Pi using `pi install`:
 
 ```bash
 pi install git:github.com/stigian/pi-extension-bedrock-mantle-openai
 ```
 
-Or for local development:
+For local development, install from a checkout:
 
 ```bash
-pi -e ./pi-extension-bedrock-mantle-openai
+pi install ./pi-extension-bedrock-mantle-openai
 ```
-
----
 
 ## Configuration
 
-### 1. AWS Credentials
+### 1. AWS credentials
 
-Ensure your environment has valid AWS credentials with permissions for Bedrock Mantle:
+Provide AWS credentials with permission to call Bedrock Mantle:
+
+**AWS profile / SSO**
+
+```bash
+export AWS_PROFILE="..."
+```
+
+**STS credentials**
 
 ```bash
 export AWS_ACCESS_KEY_ID="AKIA..."
 export AWS_SECRET_ACCESS_KEY="..."
-export AWS_SESSION_TOKEN="..." # If using temporary credentials / SSO
+export AWS_SESSION_TOKEN="..."
 ```
 
-**Required IAM Permissions:**
+Required IAM permissions:
+
 - `bedrock-mantle:CallWithBearerToken`
 - `bedrock-mantle:CreateInference`
-- or AWS managed policy `AmazonBedrockMantleInferenceAccess`
 
-### 2. Region Selection
+Or the AWS managed policy `AmazonBedrockMantleInferenceAccess`.
 
-The effective AWS region is resolved in the following precedence order:
-1. explicit runtime/provider option `region` when the caller supplies one
-2. provider-scoped `AWS_REGION`
-3. process `AWS_REGION`
-4. provider-scoped `AWS_DEFAULT_REGION`
-5. process `AWS_DEFAULT_REGION`
-6. the region encoded in a standard Mantle base URL such as `https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1`
-7. fallback to `us-east-1` when the standard default Mantle endpoint is in use
+### 2. Region
 
-Examples:
+The effective AWS region is resolved in this order:
+
+1. Explicit `region` option passed at runtime.
+2. Provider-scoped `AWS_REGION`.
+3. Process `AWS_REGION`.
+4. Provider-scoped `AWS_DEFAULT_REGION`.
+5. Process `AWS_DEFAULT_REGION`.
+6. The region encoded in a standard Mantle base URL (e.g. `https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1`).
+7. Fallback to `us-east-1` when the default Mantle endpoint is in use.
 
 ```bash
-export AWS_REGION="us-east-1"
-# or
 export AWS_REGION="us-gov-west-1"
 ```
 
-Pi provider-scoped env also works through `auth.json` or other provider auth flows, so Mantle can use different AWS settings than the surrounding shell environment.
+Provider environment variables from `auth.json` or other Pi provider auth flows also apply, so Mantle can use different AWS settings than the surrounding shell.
 
-### 3. Preferred `baseUrl` Override in `models.json`
+### 3. `baseUrl` override in `models.json`
 
-Pi already supports provider-level `baseUrl` overrides in `models.json`. Use that standard mechanism for endpoint overrides:
+Use Pi's standard provider `baseUrl` override to target a specific endpoint:
 
 ```json
 {
@@ -89,55 +86,28 @@ Pi already supports provider-level `baseUrl` overrides in `models.json`. Use tha
 }
 ```
 
-Per-model overrides remain available through Pi's standard `modelOverrides` support.
+Per-model overrides work through Pi's standard `modelOverrides` support.
 
-If the override points at a standard Mantle hostname, the extension infers the AWS region from that hostname automatically. For custom proxy hostnames, set `AWS_REGION` or `AWS_DEFAULT_REGION` as well so bearer token generation still has an explicit region.
-
----
+When the override points at a standard Mantle hostname, the extension infers the AWS region from it. For custom proxy hostnames, also set `AWS_REGION` or `AWS_DEFAULT_REGION` so bearer token generation has an explicit region.
 
 ## Usage
 
-List available models to verify provider registration:
+Verify the provider is registered:
 
 ```bash
 pi --list-models
 ```
 
-Select a model interactively in Pi using `/model` or specify it on the command line:
+Select a model interactively with `/model`, or specify one on the command line:
 
 ```bash
 pi -m bedrock-mantle-openai/openai.gpt-5.4 "Explain AWS GovCloud Bedrock Mantle endpoints"
 ```
 
----
-
-## Validation
-
-Run the package validation locally:
-
-```bash
-npm run check
-```
-
-This now performs three checks:
-- strict TypeScript validation with `tsc --noEmit`
-- a smoke-load of the extension entrypoint
-- the typed verification suite under `test/verify.test.ts`
-
-You can also run the type checker directly:
-
-```bash
-npm run typecheck
-```
-
----
-
 ## Uninstallation
-
-To remove the extension:
 
 ```bash
 pi remove pi-extension-bedrock-mantle-openai
 ```
 
-Or remove the extension entry from your `.pi/settings.json` or `~/.pi/agent/settings.json` file.
+Or remove the entry from `.pi/settings.json` or `~/.pi/agent/settings.json`, depending on where it was installed.
